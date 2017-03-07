@@ -1,0 +1,8 @@
+# Ignore everything
+*
+
+# Except these files...
+!.gitignore
+!functions.R
+!preprocessing.R
+!results.txt
