@@ -3,6 +3,6 @@
 
 # Except these files...
 !.gitignore
-!functions.R
+!model.R
 !preprocessing.R
-!results.txt
+!plots.R

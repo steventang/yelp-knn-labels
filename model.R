@@ -1,3 +1,24 @@
+library(quanteda)
+
+# Function that returns a vector of all indices for CV. K rows, first col is train, second col is test
+cross_validation_splits <- function(dfm, k) {
+  fold_size <- round(ndoc(dfm) / k)
+  remaining_indices <- 1:ndoc(dfm) # List of indices remaining to sample from
+  cv_splits <- matrix(list(), nrow = k, ncol = 2) # Matrix of lists
+
+  for (fold in 1:(k-1)) {
+    cv_splits[[fold, 1]] <- sample(remaining_indices, fold_size, replace = FALSE)
+    # Train indicies are those in our entire dfm that are not in test indicies
+    cv_splits[[fold, 2]] <- (1:ndoc(dfm))[-cv_splits[[fold, 1]]]
+    # Remove the test indices we already used from our remaining indices
+    remaining_indices <- setdiff(remaining_indices, cv_splits[[fold, 1]])
+  } 
+  # For final fold, just use whater is remaining in our indices
+  cv_splits[[k,1]] <- remaining_indices
+  cv_splits[[k,2]] <- (1:ndoc(dfm))[-cv_splits[[k,1]]]
+  return(cv_splits)
+}
+
 # Returns knn_matrix
 find_nearest_neighbors <- function(dfm, test_dfm, train_dfm, num_neighbors, remove_test = TRUE) {
   # Turn our entire dfm into a tf matrix, keeping original dfm in tact
@@ -34,7 +55,7 @@ find_nearest_neighbors <- function(dfm, test_dfm, train_dfm, num_neighbors, remo
   return(knn_matrix)
 }
 
-### REFACTORED VERSION WITH COLNAMES ###
+# Take in knn matrix, turn it into a matrix that counts how many neighbors have each label
 classify_neighbors <- function(knn_matrix, tags) {
   count_matrix <- matrix(0, nrow = nrow(knn_matrix), ncol = (length(tags) + 1))
   colnames(count_matrix) <- c("docname", tags)
@@ -50,7 +71,6 @@ classify_neighbors <- function(knn_matrix, tags) {
   }
   return(count_matrix)
 }
-
 
 # Prior probability of a doc having a tag in our training set
 mlknn_priors <- function(train_dfm, tags) {
@@ -80,8 +100,7 @@ mlknn_posteriors <- function(train_dfm, count_matrix, tags, K) {
     for (row_i in (1:ndoc(train_dfm))) {
       delta <- as.integer(count_matrix[[row_i, tag]])
       # If the document is labeled with tag...
-      # if (corpus_subset(corpus, docnames(corpus) == count_matrix[[row_i, 'docname']])$documents[[tag]] == 1) {
-      if (corpus[[count_matrix[[row_i, 'docname']], tag]] == 1) { # REFACTORED VER OF ABOVE
+      if (corpus[[count_matrix[[row_i, 'docname']], tag]] == 1) {
         c_match[delta + 1] <- c_match[delta + 1] + 1 # delta+1 because our R array indices start at 1. c[1] is 0 neighbor case
       }
       else {
@@ -110,7 +129,7 @@ mlknn_predict <- function(count_matrix, priors, posteriors, tags, K) {
     for (tag in tags) {
       # Posterior is calculated by seeing how many neighbors this doc has have for this tag, then seeing what that corresponds to in our posterior matrix
       prob_has_label <- priors[[tag]] * posteriors$has_label[[which(posteriors$has_label[, 'num_neighbors'] == as.integer(count_matrix[[row_i, tag]])), tag]]
-      prob_no_label <- priors[[tag]] * posteriors$no_label[[which(posteriors$no_label[, 'num_neighbors'] == as.integer(count_matrix[[row_i, tag]])), tag]]
+      prob_no_label <- (1 - priors[[tag]]) * posteriors$no_label[[which(posteriors$no_label[, 'num_neighbors'] == as.integer(count_matrix[[row_i, tag]])), tag]]
       if (which.max(c(prob_has_label, prob_no_label)) == 1) {
         predict_matrix[row_i, tag] <- 1
       }
@@ -132,13 +151,12 @@ rank_labels <- function(count_matrix, priors, posteriors, tags, K) {
     for (tag in tags) {
       # Posterior is calculated by seeing how many neighbors this doc has have for this tag, then seeing what that corresponds to in our posterior matrix
       prob_has_label <- priors[[tag]] * posteriors$has_label[[which(posteriors$has_label[, 'num_neighbors'] == as.integer(count_matrix[[row_i, tag]])), tag]]
-      prob_no_label <- priors[[tag]] * posteriors$no_label[[which(posteriors$no_label[, 'num_neighbors'] == as.integer(count_matrix[[row_i, tag]])), tag]]
+      prob_no_label <- (1 - priors[[tag]]) * posteriors$no_label[[which(posteriors$no_label[, 'num_neighbors'] == as.integer(count_matrix[[row_i, tag]])), tag]]
       rank_matrix[row_i, tag] <- prob_has_label / (prob_has_label + prob_no_label)
     }
   }
   return(rank_matrix)
 }
-
 
 hamming_loss <- function(mlknn_predictions, tags) {
   num_labels <- length(tags)
@@ -183,6 +201,23 @@ accuracy <-function(mlknn_predictions, tags) {
   return(sum_accuracy / nrow(mlknn_predictions))
 }
 
+f1 <- function(mlknn_predictions, tags) {
+  sum_score <- 0
+  for(row_i in (1:nrow(mlknn_predictions))) {
+    prediction <- mlknn_predictions[row_i, tags]
+    truth <- corpus[[mlknn_predictions[[row_i, 'docname']], tags]]
+    correct <- 0
+    for(tag in tags) {
+    # If we correctly predicted a labelling
+      if(as.integer(prediction[tag]) == 1 & truth[[tag]] == 1) {
+        correct <- correct + 1
+      }
+    }
+    sum_score <- sum_score + ((2 * correct) / (sum(as.integer(prediction)) + sum(truth)))
+  }
+  return (sum_score / nrow(mlknn_predictions))
+}
+
 # How many times top predicted label is not in a set of true labels in an instance
 one_error <- function(rank_matrix) {
   error <- 0
@@ -193,8 +228,8 @@ one_error <- function(rank_matrix) {
     if(corpus[[rank_matrix[[row_i, 'docname']], top_label]] == 0) {
       error <- error + 1
     }
-    return(error / nrow(rank_matrix))
   }
+  return(error / nrow(rank_matrix))
 }
 
 # Also useful - how far do we go down ranking list before finding all correct label on average
@@ -222,11 +257,30 @@ coverage <- function(rank_matrix, tags) {
   return(total / nrow(rank_matrix))
 }
 
+avgprec <- function(rank_matrix, tags) {
+  precision <- 0
+  for(row_i in (1:nrow(rank_matrix))) {
+    truth <- corpus[[rank_matrix[[row_i, 'docname']], tags]]
+    true_labels <- names(truth[grep(1, truth)])
+    ranked_labels <-  names(sort(rank_matrix[row_i, -1], decreasing = TRUE))
+    sum <- 0
+    for(lab in true_labels) {
+      # Find position of the label in our rank matrix
+      lab_rank <- which(ranked_labels == lab)
+      # Get set of label names that rank higher than the label
+      higher_ranked <- ranked_labels[1:lab_rank]
+      num_higher <- length(intersect(higher_ranked, true_labels))
+      sum <- sum + (num_higher / lab_rank)
+    }
+    precision <- precision + ((1 / length(true_labels)) * sum)
+  }
+  return(precision / nrow(rank_matrix))
+}
 
 # Returns our CV Splits matrix with errors in a new col 
 cv_error <- function(dfm, cv_splits, tags, K) {
-  errors <- matrix(0, ncol = 4, nrow = nrow(cv_splits)  + 1)
-  colnames(errors) <- c("hamming", "accuracy", "one-error", "coverage")
+  errors <- matrix(0, ncol = 5, nrow = nrow(cv_splits)  + 1)
+  colnames(errors) <- c("hamming", "accuracy", "one-error", "coverage", "avgprec")
   for(row_i  in (1:nrow(cv_splits))) {
     
     print(cat("Performing cross validation for fold ", row_i, " *********************"))
@@ -264,11 +318,14 @@ cv_error <- function(dfm, cv_splits, tags, K) {
     
     print("Calculating coverage...")
     errors[row_i, 4] <- coverage(ranks, tags)
+
+    print("Calculating avgprec...")
+    errors[row_i, 5] <- avgprec(ranks, tags)
   }
   
   for (type in colnames(errors)) {
     errors[nrow(cv_splits) + 1, type] <- mean(errors[1:nrow(cv_splits), type])
   }
+  print(errors)
   return(errors)
-  # return(errors)
 }

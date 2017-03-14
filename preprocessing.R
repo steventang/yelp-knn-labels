@@ -2,7 +2,6 @@ library(dplyr)
 library(stringr)
 library(jsonlite)
 library(tidyr)
-library(ggplot2)
 
 setwd("~/Yelp")
 
