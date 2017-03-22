@@ -1,6 +1,6 @@
 library(quanteda)
 
-# Function that returns a vector of all indices for CV. K rows, first col is train, second col is test
+# Function that returns a vector of all indices for CV. K rows, first col is test, second col is train
 cross_validation_splits <- function(dfm, k) {
   fold_size <- round(ndoc(dfm) / k)
   remaining_indices <- 1:ndoc(dfm) # List of indices remaining to sample from
@@ -66,7 +66,7 @@ classify_neighbors <- function(knn_matrix, tags) {
     for (tag in tags) {
       # For all of a docs neighbors, examine whether any each of them have this tag.
       # The length of the list should be # neighbors that have this tag
-      count_matrix[row_i, tag] <- sum(corpus_subset(corpus, docnames(corpus) %in% knn_matrix[row_i, -1])$documents[[tag]]) # Sum() counts num TRUE
+      count_matrix[row_i, tag] <- sum(as.integer(corpus_subset(corpus, docnames(corpus) %in% knn_matrix[row_i, -1])$documents[[tag]])) # Sum() counts num TRUE
     }
   }
   return(count_matrix)
@@ -77,7 +77,7 @@ mlknn_priors <- function(train_dfm, tags) {
   priors_matrix <- list()
   for (tag in tags) {
     # Count all documents in training set with tag
-    doc_count <- sum(corpus_subset(corpus, docnames(corpus) %in% docnames(train_dfm))$documents[[tag]])
+    doc_count <- sum(as.integer(corpus_subset(corpus, docnames(corpus) %in% docnames(train_dfm))$documents[[tag]]))
     priors_matrix[tag] <- (1 + doc_count) / (2 + ndoc(train_dfm))
   }
   return(priors_matrix)
@@ -141,12 +141,13 @@ mlknn_predict <- function(count_matrix, priors, posteriors, tags, K) {
   return(predict_matrix)
 }
 
+
 # If we are to measure how useful as a recommendation tool to Yelp, ranking labels is useful
 # Rank matrix returns the probability of the doc having the tag in each position
 rank_labels <- function(count_matrix, priors, posteriors, tags, K) {
   rank_matrix <- matrix(0, nrow = nrow(count_matrix), ncol = length(tags) + 1)
   colnames(rank_matrix) <- c("docname", tags)
-  for (row_i in (1:nrow(count_matrix))) {
+  for(row_i in (1:nrow(count_matrix))) {
     rank_matrix[row_i, 1] <- count_matrix[[row_i, 1]]
     for (tag in tags) {
       # Posterior is calculated by seeing how many neighbors this doc has have for this tag, then seeing what that corresponds to in our posterior matrix
@@ -161,18 +162,60 @@ rank_labels <- function(count_matrix, priors, posteriors, tags, K) {
 hamming_loss <- function(mlknn_predictions, tags) {
   num_labels <- length(tags)
   loss <- 0
-  for (row_i in (1:nrow(mlknn_predictions))) {
-    missclassifications <- 0
+  for(row_i in (1:nrow(mlknn_predictions))) {
+    misclassifications <- 0
     prediction <- mlknn_predictions[row_i, ]
     truth <- corpus[[mlknn_predictions[[row_i, 'docname']], tags]]
     for (tag in tags) {
       if (as.integer(prediction[tag]) != truth[[tag]]) {
-        missclassifications <- missclassifications + 1
+        misclassifications <- misclassifications + 1
       }
     }
-    loss <- loss + (missclassifications / num_labels)
+    loss <- loss + (misclassifications / num_labels)
   }
   return(loss / nrow(mlknn_predictions))
+}
+
+# Return a list of docs where our predictions where perfect
+exact_matches <- function(mlknn_predictions, tags) {
+  exacts <- array()
+  i <- 1
+  for (row_i in (1:nrow(mlknn_predictions))) {
+    misclassifications <- 0
+    prediction <- mlknn_predictions[row_i, ]
+    truth <- corpus[[mlknn_predictions[[row_i, 'docname']], tags]]
+    for (tag in tags) {
+      if (as.integer(prediction[tag]) != truth[[tag]]) {
+        misclassifications <- misclassifications + 1
+      }
+    }
+    if(misclassifications == 0) {
+      exacts[i] <- mlknn_predictions[[row_i, 'docname']]
+      i <- i + 1
+    }
+  }
+  return(exacts)
+}
+
+# Return a list of docs where our predictions where all wrong
+all_wrong <- function(mlknn_predictions, tags) {
+  wrongs <- array()
+  i <- 1
+  for (row_i in (1:nrow(mlknn_predictions))) {
+    falsepos <- 0
+    prediction <- mlknn_predictions[row_i, ]
+    truth <- corpus[[mlknn_predictions[[row_i, 'docname']], tags]]
+    for (tag in tags) {
+      if (as.integer(prediction[tag]) == 1 & truth[[tag]] != 1) {
+        falsepos <- falsepos + 1
+      }
+    }
+    if(falsepos == sum(as.integer(prediction[-1])) & sum(as.integer(prediction[-1]) != 0)) {
+      wrongs[i] <- mlknn_predictions[[row_i, 'docname']]
+      i <- i + 1
+    }
+  }
+  return(wrongs)
 }
 
 # Accuracy doesn't account for false positive misclassifications, ie we say 1 but truth is 0
@@ -302,12 +345,13 @@ cv_error <- function(dfm, cv_splits, tags, K) {
     posteriors <- mlknn_posteriors(train, count_matrix, tags, K)
     
     print("Making ML-KNN predictions...")
-    predictions <- mlknn_predict(count_matrix, priors, posteriors, tags, K)
+    predictions <<- mlknn_predict(count_matrix, priors, posteriors, tags, K)
+    print(predictions)
     
     print("Calculating label rankings")
-    ranks <- rank_labels(count_matrix, priors, posteriors, tags, K)
+    ranks <<- rank_labels(count_matrix, priors, posteriors, tags, K)
     
-    print("Calculating hamming loss...")
+    print("Calculating hamming loss...") y
     errors[row_i, 1] <- hamming_loss(predictions, tags)
     
     print("Calculating accuracy...")
